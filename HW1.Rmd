@@ -1,0 +1,465 @@
+---
+title: "HW1"
+author: "Jinming Li Fan Ye Xiangmeng Qin"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+
+# Q1 1) Data visualization: flights at ABIA
+
+##"Analyzing Average Flight Delay Times by Airline from Austin Airport"
+I'm a student in Austin who loves to travel, and it's important to me that my flight out of Austin is delayed.Luckily,We can analyze and rank airlines based on their average flight delay times from Austin, providing travelers with clear insights on which airlines are more likely to experience delays, helping them make more informed decisions when booking flights.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(mosaic)
+library(dplyr)
+library(stringr)
+library(data.table)
+library(ggplot2)
+library(tidyverse)
+library(rsample)  
+library(caret)
+library(modelr)
+library(parallel)
+library(foreach)
+library(ggpubr)
+library(RCurl)
+library(ggrepel)
+library(dplyr)
+library(ggplot2)
+abia =  read.csv("ABIA.csv")
+```
+
+```{r}
+# Calculate the average delay time for each airline
+average_delay_by_carrier <- abia %>%
+  filter(Origin == "AUS") %>%
+  group_by(UniqueCarrier) %>%
+  summarize(average_delay = mean(ArrDelay, na.rm = TRUE),
+            flights_count = n()) %>%
+  filter(flights_count > 20) %>% # Include only airlines with more than 20 flights
+  arrange(desc(average_delay))
+
+# Plot the average delay time for airlines
+ggplot(average_delay_by_carrier, aes(x = fct_reorder(UniqueCarrier, average_delay), y = average_delay)) +
+  geom_col() +
+  coord_flip() + # Flip the coordinate axis for better readability
+  labs(y = "Average Delay (minutes)", x = "Airlines") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Adjust the X-axis label angle
+```
+Therefore, Delta Airlines has the longest delays on average, suggesting it has the poorest performance among the airlines listed, while US Airways has the shortest average delays, indicating it has the best performance in terms of punctuality according to this chart.Based on this chart, we can make informed decisions when booking flights, and it also serves as a tool to help airline management improve their operations.
+
+##"Analyzing Weather-Related Flight Delays from Austin Airport"
+After exploring the punctuality of various airlines departing from Austin, we also paid particular attention to delays at destination airports caused by weather conditions. The bar chart illustrates the average delay times due to weather for each destination airport. The survey results indicate that, although most airports experience relatively minor weather delays, there are a few airports that exhibit significantly higher average delays due to weather. Such insights are vital for airline companies in planning and forecasting potential flight delays and also assist travelers in considering potential weather-related issues when booking their flights.
+```{r}
+
+weather_delays <- abia %>%
+  filter(Origin == "AUS") %>%
+  group_by(Dest) %>%
+  summarize(total_weather_delay = sum(WeatherDelay, na.rm = TRUE),
+            weather_delay_count = sum(WeatherDelay > 0, na.rm = TRUE),
+            average_weather_delay = total_weather_delay / weather_delay_count) %>%
+  filter(weather_delay_count > 0) %>% 
+  arrange(desc(average_weather_delay))
+
+
+ggplot(weather_delays, aes(x = fct_reorder(Dest, average_weather_delay), y = average_weather_delay)) +
+  geom_col(fill = "steelblue") +
+  labs(y = "Average Weather Delay (minutes)", x = "Destination Airports") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+```
+
+##Top 10 U.S. airports with the longest average delays
+
+I've studied the delay rate for planes leaving Austin, and I'd like to know my delay rate for planes going to other airports.We can display the top 10 U.S. airports with the longest average delay times on a map. These airports are represented by red dots, with the size of the dot indicating the length of the average delay. Through this intuitive representation on the map, we can easily identify which airports face greater challenges in terms of flight delays. This information is very valuable for both travelers and airlines when planning flights and considering potential delay risks.
+
+```{r}
+
+airports_coord_raw = read.csv("airport-codes.csv")
+# Load necessary libraries
+library(dplyr)
+library(ggplot2)
+library(ggmap)
+
+# Calculate the average delay time for each destination airport
+average_delay_airports <- abia %>%
+  group_by(Dest) %>%
+  summarize(average_delay = mean(ArrDelay, na.rm = TRUE)) %>%
+  arrange(desc(average_delay)) %>%
+  head(10)
+
+# Obtain coordinates from the original airport data
+airports_coord <- airports_coord_raw %>%
+  filter(iata_code %in% average_delay_airports$Dest) %>%
+  select(iata_code, coordinates) %>%
+  separate(coordinates, into=c("lon", "lat"), sep=",", convert = TRUE)
+
+# Merge the coordinates into the delay data
+average_delay_airports <- merge(average_delay_airports, airports_coord, by.x = "Dest", by.y = "iata_code")
+
+# Create a map
+usamap <- borders("usa", colour="#efede1", fill="#efede1") 
+ggplot(average_delay_airports) + usamap +
+  geom_point(aes(x = lat, y = lon, size = average_delay), col = "red") +
+  geom_text_repel(aes(x = lat, y = lon, label = Dest), size = 3) + 
+  scale_size_continuous(name = "Average Delay (minutes)", range = c(3, 8)) +
+  theme_void()
+
+
+
+```
+This map provides an intuitive way to understand which airports experience more significant delays. This can assist travelers and airlines in considering these delay risks when planning flights.
+
+##"Analyzing and Visualizing Average Departure and Arrival Delays by Airlines Throughout the Day"
+
+So what time of day are planes most likely to be on time and late.Now, let's create visualizations to explore delays throughout the day. We'll plot the average departure and arrival delays against the time of day for different airlines. This will help us understand if there are specific times when delays are more frequent and if this pattern varies across airlines.
+
+```{r}
+library(tidyverse)
+library(lubridate)
+abia_df <-abia
+
+convert_time <- function(hhmm) {
+  if (is.na(hhmm)) {
+    return(NA)
+  } else {
+    if (hhmm == 2400) {
+      hhmm <- 0
+    }
+    hour <- hhmm %/% 100
+    minute <- hhmm %% 100
+    return(hour + minute / 60)
+  }
+}
+time_columns <- c('DepTime', 'CRSDepTime', 'ArrTime', 'CRSArrTime')
+for (col in time_columns) {
+  abia_df[[col]] <- sapply(abia_df[[col]], convert_time)
+}
+
+abia_df_cleaned <- na.omit(abia_df, cols = c('DepDelay', 'ArrDelay'))
+
+plot_delays <- function(df, time_col, delay_col, title) {
+  grouped <- df %>%
+    group_by(UniqueCarrier, !!sym(time_col)) %>%
+    summarise(AverageDelay = mean(!!sym(delay_col), na.rm = TRUE), .groups = 'drop')
+
+  ggplot(grouped, aes(x = !!sym(time_col), y = AverageDelay, group = UniqueCarrier, color = UniqueCarrier)) +
+    geom_line() +
+    labs(title = title, x = "Time of Day (Hours)", y = "Average Delay (Minutes)") +
+    theme_minimal() +
+    scale_color_discrete(name = "Airline") +
+    theme(legend.position = "bottom")
+}
+
+# Check if column names exist in the dataset
+if("DepTime" %in% names(abia_df_cleaned) && "DepDelay" %in% names(abia_df_cleaned)) {
+  plot_delays(abia_df_cleaned, 'DepTime', 'DepDelay', 'Average Departure Delays at Different Times of Day and Airlines')
+}
+
+if("ArrTime" %in% names(abia_df_cleaned) && "ArrDelay" %in% names(abia_df_cleaned)) {
+  plot_delays(abia_df_cleaned, 'ArrTime', 'ArrDelay', 'Average Arrival Delays at Different Times of Day and Airlines')
+}
+
+
+
+```
+I believe these charts are valuable for airlines and airport operators as they can reveal patterns of delays, helping them to optimize flight schedules, improve service quality, and reduce future delays. For passengers, this information is helpful in understanding what times of day they might encounter more delays when traveling.
+
+##"Analyzing and Visualizing the Busiest Flight Routes from Austin"
+
+When we got back to Austin, I couldn't help but wonder where Austin flew the most planes.Through the below code, we can clearly identify which routes are the busiest departing from Austin, that is, the routes with the highest number of flights. This helps in understanding the patterns of flight distribution, which is significant for airlines and airport operators in planning resources and operational strategies. Moreover, for passengers, knowing the busiest routes can aid in planning their travels, especially during peak periods.
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+
+# Calculate the number of flights for each route
+busy_routes <- abia_df_cleaned %>%
+  group_by(Origin, Dest) %>%
+  summarise(FlightCount = n(), .groups = 'drop') %>%
+  arrange(desc(FlightCount))
+
+# Visualize the busiest routes (e.g., top 10)
+ggplot(busy_routes[1:10,], aes(x = reorder(paste(Origin, Dest, sep = "-"), FlightCount), y = FlightCount)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Busiest Flight Routes", x = "Route", y = "Number of Flights") +
+  theme_minimal() +
+  coord_flip() # Makes the route labels more readable
+
+```
+
+This chart presents the busiest flight routes from Austin, with AUS-DFW having the highest number of flights, indicating it may be the most popular or critical route. AUS-DAL also shows considerable activity, while other routes like AUS-ORD and AUS-ATL have fewer flights. This provides a visual insight into route demand and potential congestion, valuable for travelers when planning their journeys, as well as for airlines and airport management in scheduling flights and allocating resources.
+
+##"Calculation and Visualization of Airline Average Delay Times and On-Time Rates"
+
+Finally, we look at the pros and cons of each airline regarding punctuality and late travel.Through the visualizations, we can intuitively see the delay patterns and punctuality performance of different airlines. The size of the bubbles directly corresponds to their average delay times and on-time rates, making it straightforward to compare the performance of various airlines.
+```{r}
+# Calculate the average delay time and on-time rate for each airline
+airline_performance <- abia_df_cleaned %>%
+  group_by(UniqueCarrier) %>%
+  summarise(AverageDelay = mean(DepDelay, na.rm = TRUE),
+            OnTimeRate = mean(DepDelay <= 0, na.rm = TRUE) * 100,
+            .groups = 'drop') %>%
+  arrange(desc(AverageDelay))
+
+# Visualize the average delay time using bubble plot
+ggplot(airline_performance, aes(x = reorder(UniqueCarrier, AverageDelay), y = 1, size = AverageDelay)) +
+  geom_point(fill = "coral", shape = 21) +
+  labs(title = "Average Delay Time by Airlines", x = "Airline", y = NULL) +
+  theme_minimal() +
+  theme(axis.title.y = element_blank()) +
+  scale_size_continuous(range = c(3, 15)) +
+  coord_flip() # Makes the airline labels more readable
+
+# Visualize the on-time rate using bubble plot
+ggplot(airline_performance, aes(x = reorder(UniqueCarrier, OnTimeRate), y = 1, size = OnTimeRate)) +
+  geom_point(fill = "lightgreen", shape = 21) +
+  labs(title = "On-Time Rate by Airlines", x = "Airline", y = NULL) +
+  theme_minimal() +
+  theme(axis.title.y = element_blank()) +
+  scale_size_continuous(range = c(3, 15)) +
+  coord_flip() # Makes the airline labels more readable
+```
+
+The airline with the highest average delay time is JetBlue (B6) with an average delay of 58.6 minutes.The airline with the lowest average delay time is US Airways (US) with an average delay of 28.2 minutes.The airline with the highest on-time rate is Endeavor Air (9E) with an on-time rate of 24.3%.The airline with the lowest on-time rate is Southwest Airlines (WN) with an on-time rate of 2.98%.While JetBlue (B6) has the highest average delay time, it also has a relatively low on-time rate of 18.5%.Endeavor Air (9E) has a high on-time rate but still experiences an average delay of 42.0 minutes.Southwest Airlines (WN) has a very low on-time rate, indicating that it has a higher proportion of delayed flights.Northwest Airlines (NW) has the highest on-time rate (44.8%) among the airlines in the list, indicating that it has a better track record for on-time arrivals.
+
+# Q2) Wrangling the Olympics
+
+## (2.A) What is the 95th percentile of heights for female competitors across all Athletics events
+
+95th percentile of heights for female competitors across all Athletics events is 183.
+```{r echo=FALSE}
+
+setwd("/Users/qxm/Desktop/Spring2024/Data Mining/HW_1")
+Olym<-read.csv("olympics_top20.csv")
+
+OlymF <- subset(Olym, sex == "F" & sport == "Athletics")
+
+result <- quantile(OlymF$height, probs = 0.95, na.rm = TRUE)
+
+#print(result)
+
+```
+## (2.B) Which single women's event had the greatest variability in competitor's heights across the entire history of the Olympics, as measured by the standard deviation?
+
+Rowing Women's Coxed Fours has the greatest variability, with standard derivation equals to 10.86549
+ 
+```{r echo=FALSE}
+library(dplyr)
+
+OlymF <- Olym %>% filter(sex == "F")
+
+Olymevent <- OlymF %>%
+  group_by(event) %>%
+  summarize(sd_height = sd(height, na.rm = TRUE)) %>%
+  ungroup() %>%  
+  arrange(desc(sd_height))
+
+top_event <- head(Olymevent, 1)
+
+print(top_event)
+
+```
+## (2.C) How has the average age of Olympic swimmers changed over time? Does the trend look different for male swimmers relative to female swimmers? 
+
+Trends in the average age of Olympic swimmers over time show a general increase for both genders, with female swimmers' average age rising more significantly in the most recent Olympics. Male swimmers' average age has increased steadily since the 1950s after an early 20th-century peak.
+
+
+```{r echo=FALSE,fig.height = 10}
+
+library(ggplot2)
+
+OlymSwim <- Olym %>%
+  filter(sport == "Swimming") %>%
+  group_by(year, sex) %>%
+  summarize(avg_age = mean(age, na.rm = TRUE)) %>%
+  ungroup()  
+
+p <- ggplot(OlymSwim, aes(x = year, y = avg_age, color = sex)) +
+  geom_line() +
+  labs(title = "Average Age of Olympic Swimmers Over Time",
+       caption = "Trends for male and female swimmers.") +
+  theme_minimal()
+
+print(p)
+
+
+```
+
+# Q3) K-nearest neighbors: cars
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(caret)
+library(class)
+library(gmodels)
+library(FNN)
+# Load the data
+data <- read.csv("sclass.csv")
+
+# Filter data for '350' and '65 AMG' trim levels
+data_350 <- subset(data, trim == '350', select = c('mileage', 'price'))
+data_65_AMG <- subset(data, trim == '65 AMG', select = c('mileage', 'price'))
+
+# Splitting the data into training and testing sets for each trim level
+set.seed(1)
+index_350 <- createDataPartition(data_350$price, p = .8, list = FALSE)
+train_350 <- data_350[index_350,]
+test_350 <- data_350[-index_350,]
+
+set.seed(1) 
+index_65_AMG <- createDataPartition(data_65_AMG$price, p = .8, list = FALSE)
+train_65_AMG <- data_65_AMG[index_65_AMG,]
+test_65_AMG <- data_65_AMG[-index_65_AMG,]
+
+# Function to compute RMSE for a range of K values
+compute_rmse <- function(train_data, test_data, max_k) {
+  rmse_values <- numeric(max_k - 1)
+  for (k in 2:max_k) {
+    model <- knn.reg(train = train_data[,'mileage', drop = FALSE], y = train_data$price,
+                     test = test_data[,'mileage', drop = FALSE], k = k)
+    rmse <- sqrt(mean((test_data$price - model$pred)^2))
+    rmse_values[k - 1] <- rmse
+  }
+  return(rmse_values)
+}
+
+# Compute RMSE for a range of K values for both trims
+rmse_values_350 <- compute_rmse(train_350, test_350, max_k = 125)
+rmse_values_65_AMG <- compute_rmse(train_65_AMG, test_65_AMG, max_k = 125)
+
+# Plot RMSE vs K
+k_values <- 2:125
+plot(k_values, rmse_values_350, type = 'b', col = 'blue', xlab = 'K', ylab = 'RMSE', main = 'RMSE vs K for 350 Trim')
+plot(k_values, rmse_values_65_AMG, type = 'b', col = 'red', xlab = 'K', ylab = 'RMSE', main = 'RMSE vs K for 65 AMG Trim')
+
+# Find the optimal K (the one with the lowest RMSE)
+optimal_k_350 <- which.min(rmse_values_350) + 1  # +1 because K starts from 2
+optimal_k_65_AMG <- which.min(rmse_values_65_AMG) + 1  # +1 because K starts from 2
+```
+
+Thus the optimal K for 350's prices and 65AMG's prices with KNN method should be
+
+```{r, echo = FALSE}
+print (optimal_k_350)
+print (optimal_k_65_AMG)
+```
+
+optimal value of K's plot of the fitted mode is as:
+
+```{r, echo = FALSE}
+
+# Plot the fitted model for the optimal K
+plot_fitted_model <- function(train_data, test_data, optimal_k, trim_name) {
+  model <- knn.reg(train = train_data[,'mileage', drop = FALSE], y = train_data$price,
+                   test = test_data[,'mileage', drop = FALSE], k = optimal_k)
+  plot(test_data$mileage, test_data$price, main = paste('Fitted Model vs Mileage for', trim_name, 'Trim (K=', optimal_k, ')'),
+       xlab = 'Mileage', ylab = 'Price', pch = 19, col = 'black', cex = 0.5)
+  points(test_data$mileage, model$pred, col = 'red', pch = 4)
+}
+# Load necessary libraries
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(class)
+print(optimal_k_350)
+print(optimal_k_65_AMG)
+# Function to plot the fitted model
+plot_fitted_model <- function(train_set, test_set, optimal_k, trim_name) {
+  model <- knn(train = train_set[, 'mileage', drop = FALSE], 
+               test = test_set[, 'mileage', drop = FALSE], 
+               cl = train_set$price, k = optimal_k)
+  test_set$predicted_price <- as.numeric(as.character(model))
+  
+  ggplot(test_set, aes(x = mileage)) +
+    geom_point(aes(y = price), color = 'blue') +
+    geom_line(aes(y = predicted_price), color = 'red') +
+    labs(title = paste("Fitted Model for", trim_name, "Trim (K=", optimal_k, ")"),
+         x = "Mileage", y = "Price")
+}
+
+plot_fitted_model(train_350, test_350, optimal_k_350, '350')
+plot_fitted_model(train_65_AMG, test_65_AMG, optimal_k_65_AMG, '65 AMG')
+```
+
+Run a KNN with different seed again to get a second pair of graphs:
+
+```{r, echo = FALSE}
+# Load necessary libraries
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(class)
+# Read the data and filter for the required trims
+data <- read.csv("sclass.csv")
+sclass_350 <- subset(data, trim == '350')
+sclass_65_AMG <- subset(data, trim == '65 AMG')
+
+# Split the data into training and testing sets
+set.seed(2) # for reproducibility
+index_350 <- createDataPartition(sclass_350$price, p = 0.8, list = FALSE)
+train_350 <- sclass_350[index_350,]
+test_350 <- sclass_350[-index_350,]
+
+index_65_AMG <- createDataPartition(sclass_65_AMG$price, p = 0.8, list = FALSE)
+train_65_AMG <- sclass_65_AMG[index_65_AMG,]
+test_65_AMG <- sclass_65_AMG[-index_65_AMG,]
+
+# Function to perform KNN and calculate RMSE for a range of K values
+knn_rmse <- function(train_set, test_set, max_k) {
+  rmse <- numeric(max_k)
+  
+  for (k in 2:max_k) {
+    model <- knn(train = train_set[, 'mileage', drop = FALSE], 
+                 test = test_set[, 'mileage', drop = FALSE], 
+                 cl = train_set$price, k = k)
+    rmse[k] <- sqrt(mean((test_set$price - as.numeric(as.character(model)))^2))
+  }
+  
+  return(rmse[-1]) # remove the first element as it's for k=1 and we start from k=2
+}
+
+# Run KNN for a range of K values and 4. Calculate RMSE
+max_k <- 50
+rmse_350 <- knn_rmse(train_350, test_350, max_k)
+rmse_65_AMG <- knn_rmse(train_65_AMG, test_65_AMG, max_k)
+
+# Plot RMSE vs K for each trim
+k_values <- 2:max_k
+df_rmse <- data.frame(k = k_values, RMSE_350 = rmse_350, RMSE_65_AMG = rmse_65_AMG)
+df_rmse_long <- pivot_longer(df_rmse, cols = c(RMSE_350, RMSE_65_AMG), names_to = "Trim", values_to = "RMSE")
+
+ggplot(df_rmse_long, aes(x = k, y = RMSE, color = Trim)) +
+  geom_line() +
+  labs(title = "RMSE vs K for Each Trim", x = "K Value", y = "RMSE")
+
+# Identify the optimal K and plot the fitted model for each trim
+optimal_k_350 <- which.min(rmse_350)
+optimal_k_65_AMG <- which.min(rmse_65_AMG)
+# Function to plot the fitted model
+plot_fitted_model <- function(train_set, test_set, optimal_k, trim_name) {
+  model <- knn(train = train_set[, 'mileage', drop = FALSE], 
+               test = test_set[, 'mileage', drop = FALSE], 
+               cl = train_set$price, k = optimal_k)
+  test_set$predicted_price <- as.numeric(as.character(model))
+  
+  ggplot(test_set, aes(x = mileage)) +
+    geom_point(aes(y = price), color = 'blue') +
+    geom_line(aes(y = predicted_price), color = 'red') +
+    labs(title = paste("Fitted Model for", trim_name, "Trim (K=", optimal_k, ")"),
+         x = "Mileage", y = "Price")
+}
+
+plot_fitted_model(train_350, test_350, optimal_k_350, '350')
+plot_fitted_model(train_65_AMG, test_65_AMG, optimal_k_65_AMG, '65 AMG')
+
+```
+
+The trim of 350 yields larger optimal k value of. This is because 350 is with more spread-out data points or greater variability might require a larger K to effectively smooth over the noise and capture the underlying trend.
