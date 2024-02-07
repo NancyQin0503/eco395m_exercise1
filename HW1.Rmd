@@ -1,6 +1,6 @@
 ---
 title: "HW1"
-author: "Jinming Li Fan Ye Xiangmeng Qin"
+author: "Jinming Li, Fan Ye, Xiangmeng Qin"
 date: "`r Sys.Date()`"
 output: word_document
 ---
